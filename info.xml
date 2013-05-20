@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<extension key="net.ourpowerbase.report.dbhealth" type="module">
+  <file>dbhealth</file>
+  <name>Database Health Report</name>
+  <description>Provides statistics on how extensively a Drupal-based CiviCRM database is being used </description>
+  <license>GPL v.3 or later</license>
+  <maintainer>
+    <author>Joseph Lacey/Jamie McClelland/Progressive Technology Project</author>
+    <email>jamie@progressivetech.org</email>
+  </maintainer>
+  <releaseDate>2013-05-20</releaseDate>
+  <version>0.1</version>
+  <develStage>alpha</develStage>
+  <compatibility>
+    <ver>4.3</ver>
+  </compatibility>
+  <comments>This is a new, undeveloped module</comments>
+  <civix>
+    <namespace>CRM/Dbhealth</namespace>
+  </civix>
+</extension>
