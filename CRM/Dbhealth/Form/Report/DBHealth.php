@@ -1,7 +1,5 @@
 <?php
 
-require_once 'CRM/Report/Form.php';
-
 class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
   protected $_summary = NULL;
   protected $_log_date_where_clause = NULL;
@@ -386,8 +384,6 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
   }
 
   function alterDisplay(&$rows) {
-    require_once 'CRM/Core/DAO.php';
-
     // custom code to alter rows
     $entryFound = false;
     foreach ($rows as $rowNum => $row) {
