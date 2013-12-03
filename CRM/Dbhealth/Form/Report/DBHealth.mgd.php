@@ -15,7 +15,6 @@ return array (
       'description' => 'Database Health Report: Provides statistics on how extensively a Drupal-based CiviCRM database is being used',
       'class_name' => 'CRM_Dbhealth_Form_Report_DBHealth',
       'report_url' => 'net.ourpowerbase.report.dbhealth/dbhealth',
-      'component' => 'CiviCampaign',
     ),
   ),
 );
