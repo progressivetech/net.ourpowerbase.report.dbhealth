@@ -2,10 +2,19 @@
 
 class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
   protected $_summary = NULL;
+
+  // We build a dynamic set of where clause fragments depending
+  // on what is requested
   protected $_log_date_where_clause = NULL;
   protected $_activity_where_clause = NULL;
 
+  // The main where clause displays all enabled users, we keep
+  // a user-supplied where clause to calculate the totals in
+  // alterDisplay
+  protected $_totals_where_clause = NULL;
+
   function __construct() {
+    $this->_exposeContactID = FALSE;
     //Set Drupal roles for filtering
     $drupal_roles = array();
     $drupal_roles_query = 'SELECT * FROM role';
@@ -26,7 +35,8 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
             'required' => TRUE),
           'id' => array(
             'no_display'=> TRUE,
-            'required'  => TRUE
+            'title' => ts('Contact Id'),
+            'required'  => TRUE,
           ),
         ),
         'filters' => array(
@@ -44,7 +54,6 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
           'modified_contact_id' => array(
             'title' => ts('Modified Records'),
             'name' => 'id',
-            'required'  => TRUE
           ),
         ),
         'grouping'  => 'user-fields',
@@ -89,7 +98,6 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
           'activity_contact_id' => array(
             'title' => ts('Sourced Activities'),
             'name' => 'id',
-            'required' => TRUE,
           ),
         ),
         'grouping'  => 'user-fields',
@@ -101,7 +109,6 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
           'assigned_contact_id' => array(
             'title' => ts('Assigned Activities'),
             'name' => 'id',
-            'required'  => TRUE,
           ),
         ),
         'grouping'  => 'user-fields',
@@ -111,12 +118,10 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
         'fields' => array(
           'uid' => array(
             'no_display' => TRUE,
-            'required' => TRUE,
             'dbAlias' => 'drupal_users.uid',
           ),
-          'name' => array(
+          'username' => array(
             'title' => ts('Username'),
-            'required' => TRUE,
             'dbAlias'  => 'drupal_users.name',
           ),
           'access'  => array(
@@ -131,7 +136,7 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
         'fields'  => array(
           'name' => array(
             'title' => ts('Role'),
-            'dbAlias'  => 'drupal_role.name',
+            'dbAlias'  => 'GROUP_CONCAT(drupal_role.name)',
           ),
         ),
         'filters' => array(
@@ -181,42 +186,31 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
   function select() {
     $select = array();
     $this->_columnHeaders = array();
+    // Only do a query on the name, contact id, username, last access, and role
+    // The actual statistics are generated in the alterResults function.
+    $allowed_fields = array(
+      'civicrm_contact_sort_name',
+      'civicrm_contact_id',
+      'drupal_users_username',
+      'drupal_users_uid',
+      'drupal_users_access',
+      'drupal_role_name'
+    );
     foreach ($this->_columns as $tableName => $table) {
       if (array_key_exists('fields', $table)) {
         foreach ($table['fields'] as $fieldName => $field) {
           if (CRM_Utils_Array::value('required', $field) ||
              CRM_Utils_Array::value($fieldName, $this->_params['fields'])) {
-            // only include statistics columns if set
-            if (CRM_Utils_Array::value('statistics', $field)) {
-              foreach ($field['statistics'] as $stat => $label) {
-                switch (strtolower($stat)) {
-                case 'sum':
-                  $select[] = "SUM({$field['dbAlias']}) as {$tableName}_{$fieldName}_{$stat}";
-                  $this->_columnHeaders["{$tableName}_{$fieldName}_{$stat}"]['title'] = $label;
-                  $this->_columnHeaders["{$tableName}_{$fieldName}_{$stat}"]['type']  =
-                    $field['type'];
-                  $this->_statFields[] = "{$tableName}_{$fieldName}_{$stat}";
-                  break;
-                case 'count':
-                  $select[] = "COUNT({$field['dbAlias']}) as {$tableName}_{$fieldName}_{$stat}";
-                  $this->_columnHeaders["{$tableName}_{$fieldName}_{$stat}"]['title'] = $label;
-                  $this->_statFields[] = "{$tableName}_{$fieldName}_{$stat}";
-                  break;
-                case 'avg':
-                  $select[] = "ROUND(AVG({$field['dbAlias']}),2) as {$tableName}_{$fieldName}_{$stat}";
-                  $this->_columnHeaders["{$tableName}_{$fieldName}_{$stat}"]['type']  =
-                    $field['type'];
-                  $this->_columnHeaders["{$tableName}_{$fieldName}_{$stat}"]['title'] = $label;
-                  $this->_statFields[] = "{$tableName}_{$fieldName}_{$stat}";
-                  break;
-                }
-              }
-            } else {
+            if(in_array($tableName . '_' . $fieldName, $allowed_fields)) {
               $select[] = "{$field['dbAlias']} as {$tableName}_{$fieldName}";
-              $this->_columnHeaders["{$tableName}_{$fieldName}"]['type']  = CRM_Utils_Array::value('type', $field);
-              $this->_columnHeaders["{$tableName}_{$fieldName}"]['title'] = CRM_Utils_Array::value('title', $field);
 
             }
+            else{
+              // Set their value to 0 because it will be replaced below.
+              $select[] = "0 as {$tableName}_{$fieldName}";
+            }
+            $this->_columnHeaders["{$tableName}_{$fieldName}"]['type']  = CRM_Utils_Array::value('type', $field);
+            $this->_columnHeaders["{$tableName}_{$fieldName}"]['title'] = CRM_Utils_Array::value('title', $field);
           }
         }
       }
@@ -236,20 +230,7 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
 
     $this->_from = "
       FROM civicrm_contact {$this->_aliases['civicrm_contact']}
-      LEFT JOIN civicrm_contact {$this->_aliases['modified_contact']}
-      ON {$this->_aliases['civicrm_contact']}.id = {$this->_aliases['modified_contact']}.id
-      LEFT JOIN civicrm_contact {$this->_aliases['modified_individual']}
-      ON {$this->_aliases['civicrm_contact']}.id = {$this->_aliases['modified_individual']}.id
-      LEFT JOIN civicrm_contact {$this->_aliases['modified_organization']}
-      ON {$this->_aliases['civicrm_contact']}.id = {$this->_aliases['modified_organization']}.id
-      LEFT JOIN civicrm_contact {$this->_aliases['modified_household']}
-      ON {$this->_aliases['civicrm_contact']}.id = {$this->_aliases['modified_household']}.id
-      LEFT JOIN civicrm_contact {$this->_aliases['activity_contact']}
-      ON {$this->_aliases['modified_contact']}.id = {$this->_aliases['activity_contact']}.id
-      LEFT JOIN civicrm_contact {$this->_aliases['assigned_contact']}
-      ON {$this->_aliases['activity_contact']}.id = {$this->_aliases['assigned_contact']}.id
-      INNER JOIN civicrm_uf_match
-      ON {$this->_aliases['assigned_contact']}.id = civicrm_uf_match.contact_id
+      INNER JOIN civicrm_uf_match ON {$this->_aliases['civicrm_contact']}.id = civicrm_uf_match.contact_id
       LEFT JOIN users drupal_users
       ON civicrm_uf_match.uf_id = drupal_users.uid
       LEFT JOIN users_roles drupal_users_roles
@@ -263,10 +244,11 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
   function where() {
     $clauses = array();
     $this->_having = '';
+    // Build a $_log_date_where_clause and $_activity_where_clause
+    // for use in the alterDisplay function below.
     foreach ($this->_columns as $tableName => $table) {
       if (array_key_exists('filters', $table)) {
         foreach ($table['filters'] as $fieldName => $field) {
-          $clause = NULL;
           $operatorType = CRM_Utils_Array::value('operatorType', $field);
           if ($operatorType & CRM_Report_Form::OP_DATE) {
             $relative = CRM_Utils_Array::value("{$fieldName}_relative", $this->_params);
@@ -285,38 +267,31 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
           } else {
             $op = CRM_Utils_Array::value("{$fieldName}_op", $this->_params);
             if ($op) {
+              $clause = $this->whereClause($field,
+                $op,
+                CRM_Utils_Array::value("{$fieldName}_value", $this->_params),
+                CRM_Utils_Array::value("{$fieldName}_min", $this->_params),
+                CRM_Utils_Array::value("{$fieldName}_max", $this->_params)
+              );
               if ($fieldName == 'activity_type_id' &&
                 $this->_params['activity_type_id_value'] != NULL) {
-                $this->_activity_where_clause .= ' AND ' .
-                  $this->whereClause($field,
-                    $op,
-                    CRM_Utils_Array::value("{$fieldName}_value", $this->_params),
-                    CRM_Utils_Array::value("{$fieldName}_min", $this->_params),
-                    CRM_Utils_Array::value("{$fieldName}_max", $this->_params));
-              } else {
-              $clause =
-                $this->whereClause($field,
-                  $op,
-                  CRM_Utils_Array::value("{$fieldName}_value", $this->_params),
-                  CRM_Utils_Array::value("{$fieldName}_min", $this->_params),
-                  CRM_Utils_Array::value("{$fieldName}_max", $this->_params));
+                $this->_activity_where_clause .= ' AND ' . $clause;
+              }
+              else {
+                // Add to general where - this is just contact name and user role
+                if(!empty($clause)) $clauses[] = $clause;
               }
             }
-          }
-
-          if (!empty($clause)) {
-            $clauses[ ] = $clause;
           }
         }
       }
     }
-
-    //Exclude admin and civicron users from query.  No need to include non-active users.
-    $clauses[] = "drupal_users.name != 'admin' AND drupal_users.name != 'civicron'";
-    if ($clauses != NULL) {
-      $this->_where = "WHERE " . implode(' AND ', $clauses);
+    // The real $_where clause includes all users that are enabled and is not modifiable by the user.
+    // (Exclude admin and civicron users from query.  No need to include non-active users.)
+    $this->_where = " WHERE drupal_users.name != 'admin' AND drupal_users.name != 'civicron' AND drupal_users.status = 1 ";
+    if(count($clauses) > 0) {
+      $this->_where .= ' AND ' . implode(' AND ', $clauses) . ' ';
     }
-
   }
 
   function groupBy() {
@@ -345,7 +320,7 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
     $this->filterStat ($statistics);
 
     //Count Contacts
-    $contact_count_query = "SELECT COUNT(id) FROM civicrm_contact";
+    $contact_count_query = "SELECT COUNT(id) FROM civicrm_contact WHERE is_deleted = 0";
     $contact_count = CRM_Core_DAO::singleValueQuery($contact_count_query);
 
 
@@ -354,9 +329,10 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
       FROM civicrm_contact cc
       INNER JOIN civicrm_email ce
       ON cc.id = ce.contact_id
-      AND ce.is_primary = 1";
+      AND ce.is_primary = 1 AND
+      cc.is_deleted = 0";
     $contact_email_count = CRM_Core_DAO::singleValueQuery($contact_email_count_query);
-    $emailPercent = round(($contact_email_count/$contact_count)*100, 2);
+    $emailPercent = $contact_email_count/$contact_count*100;
 
     $statistics['counts']['emailPercent']['title'] = '% of contacts with email addresses';
     $statistics['counts']['emailPercent']['value'] = $emailPercent;
@@ -367,13 +343,13 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
       FROM civicrm_contact cc
       INNER JOIN civicrm_phone cp
       ON cc.id = cp.contact_id
-      AND cp.is_primary = 1";
+      AND cp.is_primary = 1 AND
+      cc.is_deleted = 0";
     $contact_phone_count = CRM_Core_DAO::singleValueQuery($contact_phone_count_query);
-    $phonePercent = round(($contact_phone_count/$contact_count)*100, 2);
+    $phonePercent = $contact_phone_count/$contact_count*100;
 
     $statistics['counts']['phonePercent']['title'] = '% of contacts with phone numbers';
     $statistics['counts']['phonePercent']['value'] = $phonePercent;
-
 
     return $statistics;
 
@@ -385,8 +361,8 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
 
   function alterDisplay(&$rows) {
     // custom code to alter rows
-    $entryFound = false;
     foreach ($rows as $rowNum => $row) {
+      $contact_id = intval($row['civicrm_contact_id']);
       // convert display name to links
       if (array_key_exists('civicrm_contact_sort_name', $row) &&
          array_key_exists('civicrm_contact_id', $row)) {
@@ -400,12 +376,10 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
 
       // Count modified Contacts
       if (array_key_exists('modified_contact_modified_contact_id', $row)) {
-        $modified_contact_id = $row['modified_contact_modified_contact_id'];
         $modified_contact_count_sql = "SELECT COUNT(DISTINCT(civicrm_contact.id))
           FROM civicrm_contact
-          JOIN civicrm_log log_civireport
-          ON civicrm_contact.id = log_civireport.entity_id
-          WHERE modified_id = $modified_contact_id
+          JOIN civicrm_log log_civireport ON civicrm_contact.id = log_civireport.entity_id
+          WHERE modified_id = $contact_id
           AND data LIKE 'civicrm_contact%'
           $this->_log_date_where_clause";
         $modified_contact_count = CRM_Core_DAO::singleValueQuery($modified_contact_count_sql);
@@ -414,12 +388,10 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
 
       // Count modified Individuals
       if (array_key_exists('modified_individual_modified_individual_id', $row)) {
-        $modified_individual_id = $row['modified_individual_modified_individual_id'];
         $modified_individual_count_sql = "SELECT COUNT(DISTINCT(civicrm_contact.id))
           FROM civicrm_contact
-          JOIN civicrm_log log_civireport
-          ON civicrm_contact.id = log_civireport.entity_id
-          WHERE log_civireport.modified_id = $modified_individual_id
+          JOIN civicrm_log log_civireport ON civicrm_contact.id = log_civireport.entity_id
+          WHERE log_civireport.modified_id = $contact_id
           AND log_civireport.data LIKE 'civicrm_contact%'
           AND civicrm_contact.contact_type = 'Individual'
           $this->_log_date_where_clause";
@@ -429,12 +401,10 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
 
       // Count modified Organizations
       if (array_key_exists('modified_organization_modified_organization_id', $row)) {
-        $modified_organization_id = $row['modified_organization_modified_organization_id'];
         $modified_organization_count_sql = "SELECT COUNT(DISTINCT(civicrm_contact.id))
           FROM civicrm_contact
-          JOIN civicrm_log log_civireport
-          ON civicrm_contact.id = log_civireport.entity_id
-          WHERE log_civireport.modified_id = $modified_organization_id
+          JOIN civicrm_log log_civireport ON civicrm_contact.id = log_civireport.entity_id
+          WHERE log_civireport.modified_id = $contact_id
           AND log_civireport.data LIKE 'civicrm_contact%'
           AND civicrm_contact.contact_type = 'Organization'
           $this->_log_date_where_clause";
@@ -444,12 +414,10 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
 
       // Count modified contacts
       if (array_key_exists('modified_household_modified_household_id', $row)) {
-        $modified_household_id = $row['modified_household_modified_household_id'];
         $modified_household_count_sql = "SELECT COUNT(DISTINCT(civicrm_contact.id))
           FROM civicrm_contact
-          JOIN civicrm_log log_civireport
-          ON civicrm_contact.id = log_civireport.entity_id
-          WHERE log_civireport.modified_id = $modified_household_id
+          JOIN civicrm_log log_civireport ON civicrm_contact.id = log_civireport.entity_id
+          WHERE log_civireport.modified_id = $contact_id
           AND log_civireport.data LIKE 'civicrm_contact%'
           AND civicrm_contact.contact_type = 'Household'
           $this->_log_date_where_clause";
@@ -459,22 +427,23 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
 
       // Count activities created
       if (array_key_exists('activity_contact_activity_contact_id', $row)) {
-        $activity_contact_id = $row['activity_contact_activity_contact_id'];
-        $activity_contact_count_sql = "SELECT COUNT(id)
-          FROM civicrm_activity activity_civireport
-          WHERE source_contact_id = $activity_contact_id $this->_activity_where_clause";
+        // NOTE: record_type_id = 2 for created activities
+        $activity_contact_count_sql = "SELECT COUNT(ac.id)
+          FROM civicrm_activity a
+          JOIN civicrm_activity_contact ac ON a.id = ac.activity_id
+          WHERE contact_id = $contact_id AND record_type_id = 2 $this->_activity_where_clause";
         $activity_contact_count = CRM_Core_DAO::singleValueQuery($activity_contact_count_sql);
         $rows[$rowNum]['activity_contact_activity_contact_id'] = $activity_contact_count;
       }
 
       // Count activities assigned
       if (array_key_exists('assigned_contact_assigned_contact_id', $row)) {
-        $assigned_contact_id = $row['assigned_contact_assigned_contact_id'];
-        $assigned_contact_count_sql = "SELECT COUNT(civicrm_activity_assignment.id)
-          FROM civicrm_activity_assignment
+        // NOTE: record_type_id = 1 for assigned activities
+        $assigned_contact_count_sql = "SELECT COUNT(civicrm_activity_contact.id)
+          FROM civicrm_activity_contact
           JOIN civicrm_activity activity_civireport
-          ON activity_civireport.id = civicrm_activity_assignment.activity_id
-          WHERE assignee_contact_id = $assigned_contact_id $this->_activity_where_clause";
+          ON activity_civireport.id = civicrm_activity_contact.activity_id
+          WHERE contact_id = $contact_id AND record_type_id = 1 $this->_activity_where_clause";
         $assigned_contact_count = CRM_Core_DAO::singleValueQuery($assigned_contact_count_sql);
         $rows[$rowNum]['assigned_contact_assigned_contact_id'] = $assigned_contact_count;
       }
@@ -490,12 +459,6 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
       if (array_key_exists('drupal_users_access', $row)) {
         $access_date = date('F j, Y', $row['drupal_users_access']);
         $rows[$rowNum]['drupal_users_access' ] = $access_date;
-      }
-
-      // skip looking further in rows, if first row itself doesn't
-      // have the column we need
-      if (!$entryFound) {
-        break;
       }
     }
   }
