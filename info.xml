@@ -4,7 +4,7 @@
   <name>Database Health Report</name>
   <description>Provides statistics on how extensively a Drupal-based CiviCRM database is being used </description>
   <license>GPL v.3 or later</license>
-  <downloadUrl>https://releases.ourpowerbase.net/net.ourpowerbase.report.dbhealth-1.0.1.zip</downloadUrl>
+  <downloadUrl>https://releases.ourpowerbase.net/net.ourpowerbase.report.dbhealth-1.0.2.zip</downloadUrl>
   <maintainer>
     <author>Joseph Lacey @ PalanteTech/Jamie McClelland @ Progressive Technology Project</author>
     <email>jamie@progressivetech.org</email>
@@ -13,7 +13,7 @@
   <documentation>
     <url>http://progressivetech.org/</url>
   </documentation>
-  <version>1.0.0</version>
+  <version>1.0.2</version>
   <develStage>stable</develStage>
   <compatibility>
     <ver>4.4</ver>
