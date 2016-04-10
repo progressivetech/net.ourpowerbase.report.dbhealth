@@ -13,18 +13,65 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
   // alterDisplay
   protected $_totals_where_clause = NULL;
 
+  protected $_cms = NULL;
+  protected $_cmsDbName = NULL;
+
+  function getCmsRoles() {
+    $cms = $this->_cms;
+    $cmsDbName = $this->_cmsDbName;
+
+    if ($cms == 'Drupal') {
+      $drupal_roles = array();
+      $drupal_roles_query = "SELECT * FROM $cmsDbName.role";
+      $drupal_roles_dao = CRM_Core_DAO::executeQuery($drupal_roles_query, CRM_Core_DAO::$_nullArray);
+      while ($drupal_roles_dao->fetch()) {
+        $drupal_roles[$drupal_roles_dao->rid] = $drupal_roles_dao->name;
+      }
+      $roles = $drupal_roles;
+    }
+    if ($cms == 'WordPress') {
+      require_once ABSPATH . WPINC . '/pluggable.php';
+      $wp_roles = wp_roles()->roles;
+      $roles = ''; 
+      foreach ($wp_roles as $k=>$role) {
+        $roles[] = $role['name'];
+      }
+    }
+  return $roles;
+  }
+
+
   function __construct() {
-    $this->_exposeContactID = FALSE;
-    //Set Drupal roles for filtering
-    $drupal_roles = array();
-    $drupal_roles_query = 'SELECT * FROM role';
-    $drupal_roles_dao = CRM_Core_DAO::executeQuery($drupal_roles_query, CRM_Core_DAO::$_nullArray);
-    while ($drupal_roles_dao->fetch()) {
-      $drupal_roles[$drupal_roles_dao->rid] = $drupal_roles_dao->name;
+    // Get the CMS type and the name of the CMS database.
+    $config = &CRM_Core_Config::singleton();
+    if ($config->userFrameworkDSN) {
+      $cmsDb = DB::connect($config->userFrameworkDSN);
+      $this->_cmsDbName = $cmsDb->dsn['database'];
+      $this->_cms = $config->userFramework;
+      // For the purposes of this extension, all Drupal-likes are Drupal.
+      if ($this->_cms == 'Drupal6' || $this->_cms == 'Drupal8' || $this->_cms == 'Backdrop') {
+        $this->_cms = 'Drupal';
+      }
     }
 
+    $this->_exposeContactID = FALSE;
+    $cms_roles = $this->getCmsRoles();
     $this->activityTypes = CRM_Core_PseudoConstant::activityType(TRUE, TRUE);
     asort($this->activityTypes);
+    if ($this->_cms == 'Drupal') {
+      $usernameField = 'name';
+      $idField = 'uid';
+      $accessField = 'access';
+      $roleField = 'rid';
+      $roleDbAlias = 'GROUP_CONCAT(cms_role.name)';
+    }
+    if ($this->_cms == 'WordPress') {
+      $usernameField = 'display_name';
+      $idField = 'ID';
+      $accessField = 'ID';
+      $roleField = 'meta_value';
+      $roleDbAlias = 'cms_role.meta_value';
+    }
 
     $this->_columns = array(
       'civicrm_contact' => array(
@@ -113,39 +160,39 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
         ),
         'grouping'  => 'user-fields',
       ),
-      'drupal_users' => array(
+      'cms_users' => array(
         'dao' => 'CRM_Contact_DAO_Contact',
         'fields' => array(
           'uid' => array(
             'no_display' => TRUE,
-            'dbAlias' => 'drupal_users.uid',
+            'dbAlias' => "cms_users.$idField",
           ),
           'username' => array(
             'title' => ts('Username'),
-            'dbAlias'  => 'drupal_users.name',
+            'dbAlias'  => "cms_users.$usernameField",
           ),
           'access'  => array(
             'title' => ts('Last Access'),
-            'dbAlias'  => 'drupal_users.access',
+            'dbAlias'  => "cms_users.$accessField",
           ),
         ),
         'grouping'  => 'user-fields',
       ),
-      'drupal_role' => array(
+      'cms_role' => array(
         'dao' => 'CRM_Contact_DAO_Contact',
         'fields'  => array(
           'name' => array(
             'title' => ts('Role'),
-            'dbAlias'  => 'GROUP_CONCAT(drupal_role.name)',
+            'dbAlias'  => $roleDbAlias,
           ),
         ),
         'filters' => array(
           'rid' => array(
             'title' => ts('User Role'),
             'operatorType' => CRM_Report_Form::OP_MULTISELECT,
-            'options' => $drupal_roles,
-            'alias' => 'drupal_role',
-            'dbAlias' => 'drupal_role.rid',
+            'options' => $cms_roles,
+            'alias' => 'cms_role',
+            'dbAlias' => "cms_role.$roleField",
           ),
         ),
         'grouping' => 'user-fields',
@@ -191,10 +238,10 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
     $allowed_fields = array(
       'civicrm_contact_sort_name',
       'civicrm_contact_id',
-      'drupal_users_username',
-      'drupal_users_uid',
-      'drupal_users_access',
-      'drupal_role_name'
+      'cms_users_username',
+      'cms_users_uid',
+      'cms_users_access',
+      'cms_role_name'
     );
     foreach ($this->_columns as $tableName => $table) {
       if (array_key_exists('fields', $table)) {
@@ -230,15 +277,21 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
 
     $this->_from = "
       FROM civicrm_contact {$this->_aliases['civicrm_contact']}
-      INNER JOIN civicrm_uf_match ON {$this->_aliases['civicrm_contact']}.id = civicrm_uf_match.contact_id
-      LEFT JOIN users drupal_users
-      ON civicrm_uf_match.uf_id = drupal_users.uid
-      LEFT JOIN users_roles drupal_users_roles
-      ON drupal_users.uid = drupal_users_roles.uid
-      LEFT JOIN role drupal_role
-      ON drupal_users_roles.rid = drupal_role.rid
-    ";
-
+      INNER JOIN civicrm_uf_match ON {$this->_aliases['civicrm_contact']}.id = civicrm_uf_match.contact_id";
+      if ($this->_cms == 'Drupal') {
+        $this->_from .= " LEFT JOIN `$this->_cmsDbName`.users cms_users
+          ON civicrm_uf_match.uf_id = cms_users.uid
+          LEFT JOIN `$this->_cmsDbName`.users_roles cms_users_roles
+          ON cms_users.uid = cms_users_roles.uid
+          LEFT JOIN `$this->_cmsDbName`.role cms_role
+          ON cms_users_roles.rid = cms_role.rid";
+      }
+      if ($this->_cms == 'WordPress') {
+        $this->_from .= " LEFT JOIN `$this->_cmsDbName`.wp_users cms_users
+        ON civicrm_uf_match.uf_id = cms_users.ID
+        LEFT JOIN `$this->_cmsDbName`.wp_usermeta cms_role
+        ON cms_users.ID = cms_role.user_id";
+      }
   }
 
   function where() {
@@ -288,7 +341,9 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
     }
     // The real $_where clause includes all users that are enabled and is not modifiable by the user.
     // (Exclude admin and civicron users from query.  No need to include non-active users.)
-    $this->_where = " WHERE drupal_users.name != 'admin' AND drupal_users.name != 'civicron' AND drupal_users.status = 1 ";
+    if ($this->_cms == 'Drupal') {
+      $this->_where = " WHERE cms_users.name != 'iiiiadmin' AND cms_users.name != 'civicron' AND cms_users.status = 1 ";
+    }
     if(count($clauses) > 0) {
       $this->_where .= ' AND ' . implode(' AND ', $clauses) . ' ';
     }
@@ -428,9 +483,10 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
       // Count activities created
       if (array_key_exists('activity_contact_activity_contact_id', $row)) {
         // NOTE: record_type_id = 2 for created activities
-        $activity_contact_count_sql = "SELECT COUNT(ac.id)
-          FROM civicrm_activity activity_civireport 
-          JOIN civicrm_activity_contact ac ON activity_civireport.id = ac.activity_id
+        $activity_contact_count_sql = "SELECT COUNT(civicrm_activity_contact.id)
+          FROM civicrm_activity_contact
+          JOIN civicrm_activity activity_civireport
+          ON activity_civireport.id = civicrm_activity_contact.activity_id
           WHERE contact_id = $contact_id AND record_type_id = 2 $this->_activity_where_clause";
         $activity_contact_count = CRM_Core_DAO::singleValueQuery($activity_contact_count_sql);
         $rows[$rowNum]['activity_contact_activity_contact_id'] = $activity_contact_count;
@@ -448,17 +504,17 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
         $rows[$rowNum]['assigned_contact_assigned_contact_id'] = $assigned_contact_count;
       }
 
-      if (array_key_exists('drupal_users_name', $row) &&
-         array_key_exists('drupal_users_uid', $row)) {
-        $user_url = CRM_Utils_System::url('user/' . $row['drupal_users_uid']);
-        $rows[$rowNum]['drupal_users_name_link' ] = $user_url;
-        $rows[$rowNum]['drupal_users_name_hover'] = ts("View User Account details for this contact");
-        unset($rows[$rowNum]['drupal_users_uid']);
+      if (array_key_exists('cms_users_name', $row) &&
+         array_key_exists('cms_users_uid', $row)) {
+        $user_url = CRM_Utils_System::url('user/' . $row['cms_users_uid']);
+        $rows[$rowNum]['cms_users_name_link' ] = $user_url;
+        $rows[$rowNum]['cms_users_name_hover'] = ts("View User Account details for this contact");
+        unset($rows[$rowNum]['cms_users_uid']);
       }
 
-      if (array_key_exists('drupal_users_access', $row)) {
-        $access_date = date('F j, Y', $row['drupal_users_access']);
-        $rows[$rowNum]['drupal_users_access' ] = $access_date;
+      if (array_key_exists('cms_users_access', $row)) {
+        $access_date = date('F j, Y', $row['cms_users_access']);
+        $rows[$rowNum]['cms_users_access' ] = $access_date;
       }
     }
   }
