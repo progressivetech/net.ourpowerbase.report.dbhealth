@@ -32,7 +32,7 @@ class CRM_Dbhealth_Form_Report_DBHealth extends CRM_Report_Form {
     if ($cms == 'WordPress') {
       require_once ABSPATH . WPINC . '/pluggable.php';
       $wp_roles = wp_roles()->roles;
-      $roles = ''; 
+      $roles = '';
       foreach ($wp_roles as $k=>$role) {
         $roles[] = $role['name'];
       }
